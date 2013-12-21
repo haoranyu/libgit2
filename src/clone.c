@@ -411,7 +411,7 @@ int git_clone(
 		return error;
 
 	if (!(error = create_and_configure_origin(&origin, repo, url, &options))) {
-		if (git_path_root(url) < 0) {
+		if (!git__prefixcmp(url, "file://")) {
 			error = git_clone_local_into(
 				repo, origin, &options.checkout_opts,
 				options.checkout_branch);
@@ -447,7 +447,7 @@ int git_clone_local_into(git_repository *repo, git_remote *remote, const git_che
 {
 	int error, root;
 	git_repository *src;
-	git_buf odb = GIT_BUF_INIT, src_path = GIT_BUF_INIT;
+	git_buf src_odb = GIT_BUF_INIT, dst_odb = GIT_BUF_INIT, src_path = GIT_BUF_INIT;
 	const char *url;
 
 	assert(repo && remote && co_opts);
@@ -463,7 +463,11 @@ int git_clone_local_into(git_repository *repo, git_remote *remote, const git_che
 	 * the repository's worktree/gitdir.
 	 */
 	url = git_remote_url(remote);
-	root = git_path_root(url);
+	if (!git__prefixcmp(url, "file://"))
+		root = strlen("file://");
+	else
+		root = git_path_root(url);
+
 	if (root >= 0)
 		git_buf_puts(&src_path, url + root);
 	else
@@ -478,18 +482,26 @@ int git_clone_local_into(git_repository *repo, git_remote *remote, const git_che
 		return error;
 	}
 
-	if ((error = git_buf_joinpath(&odb, git_repository_path(src), "objects")) < 0)
+	if ((error = git_buf_joinpath(&src_odb, git_repository_path(src), "objects")) < 0)
 		goto cleanup;
 
-	if ((error = git_futils_cp_r(git_buf_cstr(&odb), git_repository_path(repo),
+	if ((error = git_buf_joinpath(&dst_odb, git_repository_path(repo), "objects")) < 0)
+		goto cleanup;
+
+	if ((error = git_futils_cp_r(git_buf_cstr(&src_odb), git_buf_cstr(&dst_odb),
 				     0, 0755)) < 0)
+		goto cleanup;
+
+	/* For git_remote_ls() later */
+	if ((error = git_remote_connect(remote, GIT_DIRECTION_FETCH)) < 0)
 		goto cleanup;
 
 	error = checkout_branch(repo, remote, co_opts, branch);
 
 cleanup:
 	git_buf_free(&src_path);
-	git_buf_free(&odb);
+	git_buf_free(&src_odb);
+	git_buf_free(&dst_odb);
 	git_repository_free(src);
 	return error;
 }
